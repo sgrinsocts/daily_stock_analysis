@@ -258,6 +258,9 @@ class TestAgentExecutor(unittest.TestCase):
         result = executor.run("Test unknown tool")
 
         self.assertTrue(result.success)
+        self.assertEqual(len(result.tool_calls_log), 1)
+        self.assertFalse(result.tool_calls_log[0]["success"])
+        self.assertFalse(result.tool_calls_log[0]["cached"])
 
     def test_non_retriable_tool_failure_is_cached_across_hk_variants(self):
         """Equivalent HK code variants should not re-execute a non-retriable failing tool."""

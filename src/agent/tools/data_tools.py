@@ -11,11 +11,15 @@ Tools:
 
 import logging
 from datetime import date
+from threading import Lock
 from typing import Optional
 
 from src.agent.tools.registry import ToolParameter, ToolDefinition
 
 logger = logging.getLogger(__name__)
+
+_fetcher_manager_singleton = None
+_fetcher_manager_lock = Lock()
 
 
 def _get_fetcher_manager():
@@ -28,11 +32,17 @@ def _get_fetcher_manager():
     from data_provider import DataFetcherManager
     global _fetcher_manager_singleton
     if _fetcher_manager_singleton is None:
-        _fetcher_manager_singleton = DataFetcherManager()
+        with _fetcher_manager_lock:
+            if _fetcher_manager_singleton is None:
+                _fetcher_manager_singleton = DataFetcherManager()
     return _fetcher_manager_singleton
 
 
-_fetcher_manager_singleton = None
+def reset_fetcher_manager() -> None:
+    """Clear the cached DataFetcherManager so runtime config reloads take effect."""
+    global _fetcher_manager_singleton
+    with _fetcher_manager_lock:
+        _fetcher_manager_singleton = None
 
 
 def _get_db():
