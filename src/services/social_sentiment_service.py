@@ -12,6 +12,7 @@ Only activates for US stock codes (AAPL, TSLA, etc.).
 """
 
 import logging
+import threading
 import time
 from typing import Any, Dict, List, Optional
 
@@ -71,6 +72,8 @@ class SocialSentimentService:
         self._api_url = (api_url or "https://api.adanos.org").rstrip("/")
         # Simple in-memory cache: {"key": (timestamp, data)}
         self._cache: Dict[str, tuple] = {}
+        self._cache_lock = threading.RLock()
+        self._cache_inflight: Dict[str, threading.Event] = {}
 
     @property
     def is_available(self) -> bool:
@@ -100,13 +103,39 @@ class SocialSentimentService:
     def _fetch_cached(self, cache_key: str, url: str, params: Optional[Dict[str, Any]] = None) -> Optional[Any]:
         """Fetch with simple TTL cache (for trending endpoints)."""
         now = time.monotonic()
-        cached = self._cache.get(cache_key)
-        if cached and (now - cached[0]) < self._TRENDING_CACHE_TTL:
-            return cached[1]
-        data = self._fetch_json(url, params)
-        if data is not None:
-            self._cache[cache_key] = (now, data)
-        return data
+        with self._cache_lock:
+            cached = self._cache.get(cache_key)
+            if cached and (now - cached[0]) < self._TRENDING_CACHE_TTL:
+                return cached[1]
+            inflight = self._cache_inflight.get(cache_key)
+            if inflight is None:
+                inflight = threading.Event()
+                self._cache_inflight[cache_key] = inflight
+                owner = True
+            else:
+                owner = False
+
+        if not owner:
+            inflight.wait(timeout=max(1.0, float(self._TRENDING_CACHE_TTL)))
+            now = time.monotonic()
+            with self._cache_lock:
+                cached = self._cache.get(cache_key)
+                if cached and (now - cached[0]) < self._TRENDING_CACHE_TTL:
+                    return cached[1]
+            return self._fetch_json(url, params)
+
+        try:
+            data = self._fetch_json(url, params)
+            if data is not None:
+                with self._cache_lock:
+                    self._cache[cache_key] = (time.monotonic(), data)
+            return data
+        finally:
+            with self._cache_lock:
+                current = self._cache_inflight.get(cache_key)
+                if current is inflight:
+                    self._cache_inflight.pop(cache_key, None)
+                    inflight.set()
 
     def fetch_reddit_report(self, ticker: str) -> Optional[Dict]:
         """Fetch detailed Reddit report for a single ticker."""

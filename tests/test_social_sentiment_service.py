@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Tests for SocialSentimentService."""
 
+import threading
 import time
 import unittest
 from unittest.mock import patch, MagicMock
@@ -105,6 +106,40 @@ class TestFetchTrending(unittest.TestCase):
         self.svc.fetch_x_trending()
 
         self.assertEqual(mock_get.call_count, 1)
+
+    def test_trending_cache_is_thread_safe_for_same_key(self):
+        call_count = 0
+        lock = threading.Lock()
+        barrier = threading.Barrier(4)
+        errors = []
+        results = []
+
+        def fake_fetch_json(_url, _params=None):
+            nonlocal call_count
+            with lock:
+                call_count += 1
+            time.sleep(0.05)
+            return {"trending": [{"ticker": "AAPL"}]}
+
+        with patch.object(self.svc, "_fetch_json", side_effect=fake_fetch_json):
+            def worker():
+                try:
+                    barrier.wait(timeout=1)
+                    results.append(self.svc.fetch_x_trending())
+                except Exception as exc:  # pragma: no cover - thread collection
+                    errors.append(exc)
+
+            threads = [threading.Thread(target=worker) for _ in range(4)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=2)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(call_count, 1)
+        self.assertEqual(len(results), 4)
+        for result in results:
+            self.assertEqual(result, [{"ticker": "AAPL"}])
 
 
 class TestGetSocialContext(unittest.TestCase):

@@ -16,6 +16,7 @@
 
 import logging
 import time
+from threading import RLock
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, Union
 from enum import Enum
@@ -298,9 +299,10 @@ class CircuitBreaker:
         
         # 各数据源状态 {source_name: {state, failures, last_failure_time, half_open_calls}}
         self._states: Dict[str, Dict[str, Any]] = {}
+        self._lock = RLock()
     
-    def _get_state(self, source: str) -> Dict[str, Any]:
-        """获取或初始化数据源状态"""
+    def _get_state_locked(self, source: str) -> Dict[str, Any]:
+        """获取或初始化数据源状态（调用方需持有锁）。"""
         if source not in self._states:
             self._states[source] = {
                 'state': self.CLOSED,
@@ -317,79 +319,85 @@ class CircuitBreaker:
         返回 True 表示可以尝试请求
         返回 False 表示应跳过该数据源
         """
-        state = self._get_state(source)
-        current_time = time.time()
-        
-        if state['state'] == self.CLOSED:
-            return True
-        
-        if state['state'] == self.OPEN:
-            # 检查冷却时间
-            time_since_failure = current_time - state['last_failure_time']
-            if time_since_failure >= self.cooldown_seconds:
-                # 冷却完成，进入半开状态
-                state['state'] = self.HALF_OPEN
-                state['half_open_calls'] = 0
-                logger.info(f"[熔断器] {source} 冷却完成，进入半开状态")
+        with self._lock:
+            state = self._get_state_locked(source)
+            current_time = time.time()
+
+            if state['state'] == self.CLOSED:
                 return True
-            else:
+
+            if state['state'] == self.OPEN:
+                # 检查冷却时间
+                time_since_failure = current_time - state['last_failure_time']
+                if time_since_failure >= self.cooldown_seconds:
+                    # 冷却完成，进入半开状态，并为当前探测预留名额
+                    state['state'] = self.HALF_OPEN
+                    state['half_open_calls'] = 1
+                    logger.info(f"[熔断器] {source} 冷却完成，进入半开状态")
+                    return True
+
                 remaining = self.cooldown_seconds - time_since_failure
                 logger.debug(f"[熔断器] {source} 处于熔断状态，剩余冷却时间: {remaining:.0f}s")
                 return False
-        
-        if state['state'] == self.HALF_OPEN:
-            # 半开状态下限制请求次数
-            if state['half_open_calls'] < self.half_open_max_calls:
-                return True
-            return False
-        
-        return True
+
+            if state['state'] == self.HALF_OPEN:
+                # 半开状态下限制请求次数，并在放行时立即占用名额。
+                if state['half_open_calls'] < self.half_open_max_calls:
+                    state['half_open_calls'] += 1
+                    return True
+                return False
+
+            return True
     
     def record_success(self, source: str) -> None:
         """记录成功请求"""
-        state = self._get_state(source)
-        
-        if state['state'] == self.HALF_OPEN:
-            # 半开状态下成功，完全恢复
-            logger.info(f"[熔断器] {source} 半开状态请求成功，恢复正常")
-        
-        # 重置状态
-        state['state'] = self.CLOSED
-        state['failures'] = 0
-        state['half_open_calls'] = 0
+        with self._lock:
+            state = self._get_state_locked(source)
+
+            if state['state'] == self.HALF_OPEN:
+                # 半开状态下成功，完全恢复
+                logger.info(f"[熔断器] {source} 半开状态请求成功，恢复正常")
+
+            # 重置状态
+            state['state'] = self.CLOSED
+            state['failures'] = 0
+            state['half_open_calls'] = 0
     
     def record_failure(self, source: str, error: Optional[str] = None) -> None:
         """记录失败请求"""
-        state = self._get_state(source)
-        current_time = time.time()
-        
-        state['failures'] += 1
-        state['last_failure_time'] = current_time
-        
-        if state['state'] == self.HALF_OPEN:
-            # 半开状态下失败，继续熔断
-            state['state'] = self.OPEN
-            state['half_open_calls'] = 0
-            logger.warning(f"[熔断器] {source} 半开状态请求失败，继续熔断 {self.cooldown_seconds}s")
-        elif state['failures'] >= self.failure_threshold:
-            # 达到阈值，进入熔断
-            state['state'] = self.OPEN
-            logger.warning(f"[熔断器] {source} 连续失败 {state['failures']} 次，进入熔断状态 "
-                          f"(冷却 {self.cooldown_seconds}s)")
-            if error:
-                logger.warning(f"[熔断器] 最后错误: {error}")
+        with self._lock:
+            state = self._get_state_locked(source)
+            current_time = time.time()
+
+            state['failures'] += 1
+            state['last_failure_time'] = current_time
+
+            if state['state'] == self.HALF_OPEN:
+                # 半开状态下失败，继续熔断
+                state['state'] = self.OPEN
+                state['half_open_calls'] = 0
+                logger.warning(f"[熔断器] {source} 半开状态请求失败，继续熔断 {self.cooldown_seconds}s")
+            elif state['failures'] >= self.failure_threshold:
+                # 达到阈值，进入熔断
+                state['state'] = self.OPEN
+                logger.warning(f"[熔断器] {source} 连续失败 {state['failures']} 次，进入熔断状态 "
+                              f"(冷却 {self.cooldown_seconds}s)")
+                if error:
+                    logger.warning(f"[熔断器] 最后错误: {error}")
     
     def get_status(self) -> Dict[str, str]:
         """获取所有数据源状态"""
-        return {source: info['state'] for source, info in self._states.items()}
+        with self._lock:
+            return {source: info['state'] for source, info in self._states.items()}
     
     def reset(self, source: Optional[str] = None) -> None:
         """重置熔断器状态"""
-        if source:
-            if source in self._states:
-                del self._states[source]
-        else:
-            self._states.clear()
+        with self._lock:
+            if source:
+                if source in self._states:
+                    del self._states[source]
+            else:
+                self._states.clear()
 
 
 # 全局熔断器实例（实时行情专用）
