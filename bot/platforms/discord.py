@@ -11,6 +11,7 @@ Discord 平台适配器
 """
 
 import logging
+import time
 from datetime import datetime
 from typing import Dict, Any, Optional, Tuple, List
 
@@ -64,6 +65,28 @@ class DiscordPlatform(BotPlatform):
 
         if not signature or not timestamp:
             logger.warning("[Discord] 缺少签名头，拒绝请求")
+            return False
+
+        # 校验 timestamp 格式与时效性，防止重放攻击
+        try:
+            ts_int = int(timestamp)
+        except (TypeError, ValueError):
+            logger.warning("[Discord] 非法的 timestamp：必须为 Unix 秒整数，拒绝请求")
+            return False
+
+        try:
+            now_ts = int(time.time())
+        except Exception as exc:
+            logger.warning("[Discord] 获取当前时间失败: %s，拒绝请求", exc)
+            return False
+
+        # 允许的时间窗口：±5 分钟
+        if abs(now_ts - ts_int) > 300:
+            logger.warning(
+                "[Discord] 请求 timestamp 超出允许窗口，可能为重放攻击：timestamp=%s, now=%s",
+                ts_int,
+                now_ts,
+            )
             return False
 
         try:

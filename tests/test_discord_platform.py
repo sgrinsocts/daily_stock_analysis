@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import json
+import time
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -19,7 +20,14 @@ def _make_platform(public_key: str) -> DiscordPlatform:
         return DiscordPlatform()
 
 
-def _sign_headers(signing_key: SigningKey, body: bytes, timestamp: str = "1700000000"):
+def _current_timestamp() -> str:
+    """返回当前 Unix 秒字符串，用于生成有效签名。"""
+    return str(int(time.time()))
+
+
+def _sign_headers(signing_key: SigningKey, body: bytes, timestamp: str | None = None):
+    if timestamp is None:
+        timestamp = _current_timestamp()
     signature = signing_key.sign(timestamp.encode("utf-8") + body).signature.hex()
     return {
         "X-Signature-Ed25519": signature,
@@ -111,7 +119,7 @@ def test_missing_signature_header_is_rejected():
     body = json.dumps(payload).encode("utf-8")
 
     message, response = platform.handle_webhook(
-        {"X-Signature-Timestamp": "1700000000"},
+        {"X-Signature-Timestamp": _current_timestamp()},
         body,
         payload,
     )
@@ -130,7 +138,7 @@ def test_invalid_public_key_configuration_is_rejected():
     message, response = platform.handle_webhook(
         {
             "X-Signature-Ed25519": "00" * 64,
-            "X-Signature-Timestamp": "1700000000",
+            "X-Signature-Timestamp": _current_timestamp(),
         },
         body,
         payload,
@@ -140,3 +148,41 @@ def test_invalid_public_key_configuration_is_rejected():
     assert response is not None
     assert response.status_code == 401
     assert response.body == {"error": "Invalid Discord signature"}
+
+
+def test_expired_timestamp_is_rejected():
+    """过期 timestamp（超出 ±5 分钟窗口）应被拒绝，防重放攻击。"""
+    signing_key = SigningKey.generate()
+    platform = _make_platform(signing_key.verify_key.encode().hex())
+    payload = {"type": 1}
+    body = json.dumps(payload).encode("utf-8")
+    # 10 分钟前的 timestamp
+    stale_ts = str(int(time.time()) - 600)
+
+    message, response = platform.handle_webhook(
+        _sign_headers(signing_key, body, timestamp=stale_ts),
+        body,
+        payload,
+    )
+
+    assert message is None
+    assert response is not None
+    assert response.status_code == 401
+
+
+def test_non_numeric_timestamp_is_rejected():
+    """非数字 timestamp 应被拒绝。"""
+    signing_key = SigningKey.generate()
+    platform = _make_platform(signing_key.verify_key.encode().hex())
+    payload = {"type": 1}
+    body = json.dumps(payload).encode("utf-8")
+
+    message, response = platform.handle_webhook(
+        _sign_headers(signing_key, body, timestamp="not-a-number"),
+        body,
+        payload,
+    )
+
+    assert message is None
+    assert response is not None
+    assert response.status_code == 401
