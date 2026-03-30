@@ -266,9 +266,21 @@ class BacktestService:
         lookup_code = OVERALL_SENTINEL_CODE if scope == "overall" else code
 
         if analysis_date_from is not None or analysis_date_to is not None:
+            ew = int(eval_window_days) if eval_window_days is not None else None
+            count = self.repo.count_results(
+                code=code,
+                eval_window_days=ew,
+                engine_version=engine_version,
+                analysis_date_from=analysis_date_from,
+                analysis_date_to=analysis_date_to,
+            )
+            if count > self.MAX_DYNAMIC_SUMMARY_ROWS:
+                raise ValueError(
+                    "Date-filtered summary matches too many rows; narrow the analysis date range or stock code."
+                )
             rows = self.repo.list_results(
                 code=code,
-                eval_window_days=int(eval_window_days) if eval_window_days is not None else None,
+                eval_window_days=ew,
                 engine_version=engine_version,
                 analysis_date_from=analysis_date_from,
                 analysis_date_to=analysis_date_to,

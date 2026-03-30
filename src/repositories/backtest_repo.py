@@ -137,6 +137,34 @@ class BacktestRepository:
             ).all()
             return list(rows), int(total)
 
+    def count_results(
+        self,
+        *,
+        code: Optional[str],
+        eval_window_days: Optional[int] = None,
+        engine_version: Optional[str] = None,
+        analysis_date_from: Optional[date] = None,
+        analysis_date_to: Optional[date] = None,
+        days: Optional[int] = None,
+    ) -> int:
+        """Return the number of matching BacktestResult rows without loading them."""
+        with self.db.get_session() as session:
+            conditions = self._build_result_conditions(
+                code=code,
+                eval_window_days=eval_window_days,
+                engine_version=engine_version,
+                analysis_date_from=analysis_date_from,
+                analysis_date_to=analysis_date_to,
+                days=days,
+            )
+            where_clause = and_(*conditions) if conditions else True
+            count = session.execute(
+                select(func.count(BacktestResult.id))
+                .select_from(BacktestResult)
+                .where(where_clause)
+            ).scalar() or 0
+            return int(count)
+
     def list_results(
         self,
         *,
