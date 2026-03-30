@@ -130,6 +130,12 @@ _LLM_SENSITIVE_PATTERNS = (
     ),
     (
         re.compile(
+            rf'(?i)(["\'])({_LLM_SENSITIVE_FIELD_NAME_PATTERN})\1\s*:\s*(?!["\'])(\w+)'
+        ),
+        r"\1\2\1:[REDACTED]",
+    ),
+    (
+        re.compile(
             rf"(?i)\b({_LLM_SENSITIVE_FIELD_NAME_PATTERN})\b\s*[:=]\s*(['\"])(?:\\.|(?!\2).)*\2"
         ),
         r"\1=\2[REDACTED]\2",

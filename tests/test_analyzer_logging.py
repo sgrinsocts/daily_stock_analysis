@@ -227,6 +227,23 @@ def test_sanitize_llm_log_preview_redacts_single_quoted_credential_fields():
 @pytest.mark.parametrize(
     ("raw_preview", "expected_preview"),
     [
+        ('{"session_id":12345}', '{"session_id":[REDACTED]}'),
+        ('{"token":false}', '{"token":[REDACTED]}'),
+        ('{"password":null}', '{"password":[REDACTED]}'),
+        ('{"api_key":true,"secret":42}', '{"api_key":[REDACTED],"secret":[REDACTED]}'),
+    ],
+)
+def test_sanitize_llm_log_preview_redacts_quoted_json_keys_with_non_string_values(
+    raw_preview, expected_preview
+):
+    preview = _sanitize_llm_log_preview(raw_preview)
+
+    assert preview == expected_preview
+
+
+@pytest.mark.parametrize(
+    ("raw_preview", "expected_preview"),
+    [
         ("Authorization: Bearer raw-secret-token", "Authorization=Bearer [REDACTED]"),
         ("Authorization: Basic dXNlcjpwYXNz", "Authorization=Basic [REDACTED]"),
         ("Authorization: Token abc123", "Authorization=Token [REDACTED]"),
