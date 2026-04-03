@@ -38,6 +38,7 @@ from src.config import (
     normalize_news_strategy_profile,
     resolve_news_window_days,
 )
+from src.data.stock_mapping import STOCK_NAME_MAP
 from src.services.stock_code_utils import normalize_code
 
 logger = logging.getLogger(__name__)
@@ -1929,6 +1930,11 @@ class SearchService:
     FUTURE_TOLERANCE_DAYS = 1
     _CHINESE_TEXT_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
     _US_STOCK_RE = re.compile(r"^[A-Za-z]{1,5}(\.[A-Za-z])?$")
+    _OBVIOUSLY_OFF_TOPIC_NEWS_RE = re.compile(
+        r"(美股|纳斯达克|道琼斯|标普|海外|美国|欧股|日股|韩股|三大指数|通胀|科技股|芯片股|盘前|盘后"
+        r"|nasdaq|dow|s&p|u\\.s\\.|us market|inflation|pre-market|after-hours|chip stocks?)",
+        re.IGNORECASE,
+    )
 
     def __init__(
         self,
@@ -2091,6 +2097,21 @@ class SearchService:
         return cls._contains_chinese_text(" ".join(filter(None, [item.title, item.snippet, item.source])))
 
     @classmethod
+    def _is_obviously_off_topic_news_result(cls, item: SearchResult) -> bool:
+        """Detect clearly unrelated overseas or market-wide headlines."""
+        text = " ".join(filter(None, [item.title, item.snippet, item.source, item.url]))
+        if not text:
+            return False
+        return bool(cls._OBVIOUSLY_OFF_TOPIC_NEWS_RE.search(text))
+
+    @classmethod
+    def _should_drop_off_topic_fallback(cls, response: SearchResponse) -> bool:
+        """Only drop fallback batches when every item looks clearly off-topic."""
+        return bool(response.results) and all(
+            cls._is_obviously_off_topic_news_result(item) for item in response.results
+        )
+
+    @classmethod
     def _matches_stock_news_context(
         cls,
         item: SearchResult,
@@ -2104,15 +2125,23 @@ class SearchService:
             return False
 
         lower_text = text.lower()
-        normalized_name = (stock_name or "").strip().lower()
-        if normalized_name and normalized_name in lower_text:
-            return True
-
         raw_code = (stock_code or "").strip()
         if not raw_code:
             return False
 
         normalized_code = cls._normalize_stock_code(raw_code).lower()
+        candidate_names = []
+        normalized_name = (stock_name or "").strip().lower()
+        if normalized_name:
+            candidate_names.append(normalized_name)
+        mapped_name = (STOCK_NAME_MAP.get(normalized_code.upper()) or "").strip().lower()
+        if mapped_name and mapped_name not in candidate_names:
+            candidate_names.append(mapped_name)
+
+        for candidate_name in candidate_names:
+            if candidate_name in lower_text:
+                return True
+
         code_variants = {raw_code.lower(), normalized_code}
         if normalized_code.isdigit():
             if len(normalized_code) == 6:
@@ -2793,10 +2822,20 @@ class SearchService:
                         )
 
             if prefer_chinese:
-                best_to_return = best_contextual_response or fallback_response
-                if best_to_return is not None:
-                    self._put_cache(cache_key, best_to_return)
-                    return best_to_return
+                if best_contextual_response is not None:
+                    self._put_cache(cache_key, best_contextual_response)
+                    return best_contextual_response
+                if fallback_response is not None:
+                    if self._should_drop_off_topic_fallback(fallback_response):
+                        logger.info(
+                            "中文优先新闻搜索未命中 %s(%s) 股票上下文，丢弃 %s 条明显跑题的候选结果",
+                            stock_name,
+                            stock_code,
+                            len(fallback_response.results),
+                        )
+                    else:
+                        self._put_cache(cache_key, fallback_response)
+                        return fallback_response
 
             if had_provider_success:
                 return SearchResponse(
@@ -3045,6 +3084,7 @@ class SearchService:
             best_context_match_count = 0
             last_response: Optional[SearchResponse] = None
             last_processed_response: Optional[SearchResponse] = None
+            had_provider_success = False
 
             for candidate_index, provider in enumerate(provider_candidates):
                 logger.info(
@@ -3071,6 +3111,7 @@ class SearchService:
                     days=search_days,
                     **search_kwargs,
                 )
+                had_provider_success = had_provider_success or bool(response.success)
                 last_response = response
                 if dim['strict_freshness']:
                     filtered_response = self._filter_news_response(
@@ -3181,7 +3222,34 @@ class SearchService:
 
             final_response = selected_response
             if prefer_chinese and final_response is None:
-                final_response = best_contextual_response or fallback_response
+                if best_contextual_response is not None:
+                    final_response = best_contextual_response
+                elif fallback_response is not None:
+                    if self._should_drop_off_topic_fallback(fallback_response):
+                        logger.info(
+                            "[情报搜索] %s: 中文优先但未命中 %s(%s) 股票上下文，丢弃 %s 条明显跑题的候选结果",
+                            dim['desc'],
+                            stock_name,
+                            stock_code,
+                            len(fallback_response.results),
+                        )
+                        final_response = SearchResponse(
+                            query=dim['query'],
+                            results=[],
+                            provider="Filtered",
+                            success=True,
+                            error_message=None,
+                        )
+                    else:
+                        final_response = fallback_response
+                elif had_provider_success:
+                    final_response = SearchResponse(
+                        query=dim['query'],
+                        results=[],
+                        provider="Filtered",
+                        success=True,
+                        error_message=None,
+                    )
             if final_response is None:
                 final_response = last_processed_response or last_response or SearchResponse(
                     query=dim['query'],

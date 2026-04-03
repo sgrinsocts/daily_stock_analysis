@@ -222,6 +222,49 @@ class SearchNewsFreshnessTestCase(unittest.TestCase):
         p1.search.assert_called_once()
         p2.search.assert_called_once()
 
+    def test_search_stock_news_returns_empty_when_all_a_share_results_are_off_topic(self) -> None:
+        """A-share searches should fail open instead of surfacing unrelated overseas news."""
+        fresh = datetime.now().date().isoformat()
+        service = SearchService(
+            bocha_keys=["dummy_key"],
+            searxng_public_instances_enabled=False,
+            news_max_age_days=3,
+            news_strategy_profile="short",
+        )
+
+        p1 = SimpleNamespace(
+            is_available=True,
+            name="P1",
+            search=MagicMock(
+                return_value=_response(
+                    [
+                        _result("美股三大指数集体收涨", fresh),
+                        _result("海外芯片股迎来反弹", fresh),
+                    ]
+                )
+            ),
+        )
+        p2 = SimpleNamespace(
+            is_available=True,
+            name="P2",
+            search=MagicMock(
+                return_value=_response(
+                    [
+                        _result("纳斯达克科技股盘前走高", fresh),
+                        _result("美国通胀数据高于预期", fresh),
+                    ]
+                )
+            ),
+        )
+        service._providers = [p1, p2]
+
+        resp = service.search_stock_news("600519", "贵州茅台", max_results=3)
+        self.assertEqual(resp.results, [])
+        self.assertTrue(resp.success)
+        self.assertEqual(resp.provider, "Filtered")
+        p1.search.assert_called_once()
+        p2.search.assert_called_once()
+
     def test_search_stock_news_prioritizes_chinese_items_within_mixed_results(self) -> None:
         """Chinese items should be ordered ahead of English items in mixed batches."""
         fresh = datetime.now().date().isoformat()
@@ -502,6 +545,51 @@ class SearchNewsFreshnessTestCase(unittest.TestCase):
             [item.title for item in intel["latest_news"].results],
             ["贵州茅台 600519 发布分红公告"],
         )
+        p1.search.assert_called_once()
+        p2.search.assert_called_once()
+
+    def test_search_comprehensive_intel_returns_empty_when_all_a_share_results_are_off_topic(self) -> None:
+        """A-share intel should not fall back to unrelated overseas batches."""
+        fresh = datetime.now().date().isoformat()
+        service = SearchService(
+            bocha_keys=["dummy_key"],
+            searxng_public_instances_enabled=False,
+            news_max_age_days=3,
+            news_strategy_profile="short",
+        )
+
+        p1 = SimpleNamespace(
+            is_available=True,
+            name="P1",
+            search=MagicMock(
+                return_value=_response(
+                    [
+                        _result("美股三大指数集体收涨", fresh),
+                        _result("海外芯片股迎来反弹", fresh),
+                    ]
+                )
+            ),
+        )
+        p2 = SimpleNamespace(
+            is_available=True,
+            name="P2",
+            search=MagicMock(
+                return_value=_response(
+                    [
+                        _result("纳斯达克科技股盘前走高", fresh),
+                        _result("美国通胀数据高于预期", fresh),
+                    ]
+                )
+            ),
+        )
+        service._providers = [p1, p2]
+
+        with patch("src.search_service.time.sleep"):
+            intel = service.search_comprehensive_intel("600519", "贵州茅台", max_searches=1)
+
+        self.assertEqual(intel["latest_news"].results, [])
+        self.assertTrue(intel["latest_news"].success)
+        self.assertEqual(intel["latest_news"].provider, "Filtered")
         p1.search.assert_called_once()
         p2.search.assert_called_once()
 

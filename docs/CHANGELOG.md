@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 - [修复] A 股新闻中文优先链路新增股票上下文命中判断：`search_stock_news()` 现在会把明确提到当前股票代码/名称的结果排在前面，并在首个 provider 只返回中文但明显不相关的海外资讯时继续尝试后续引擎
 - [修复] A 股新闻检索现在会将 `600519.SH` / `SH600519` / `SZ000001` 等 canonical/prefix 代码归一化为沪深 6 位代码，再参与中文优先与股票上下文判断，避免前端传入 canonicalCode 时仍被英文或海外资讯占满
 - [修复] A 股多维度情报搜索现在也会沿用中文 locale 与股票上下文优先策略；`search_comprehensive_intel()` 在 Brave 路径下不再返回偏海外的默认结果，并会在首个 provider 明显跑题时继续尝试后续引擎
+- [修复] A 股中文优先新闻与情报搜索在所有 provider 都未命中当前股票上下文时不再回退展示首批海外无关结果，统一改为空结果 fail-open，避免报告被跑题资讯占满
 
 ## [3.12.0] - 2026-04-01
 
