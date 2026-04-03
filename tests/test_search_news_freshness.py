@@ -232,6 +232,45 @@ class SearchNewsFreshnessTestCase(unittest.TestCase):
         p1.search.assert_called_once()
         p2.search.assert_not_called()
 
+    def test_search_stock_news_treats_mainland_source_name_as_preferred_without_domain(self) -> None:
+        """Known mainland media names should count as preferred even without a mainland URL."""
+        fresh = datetime.now().date().isoformat()
+        service = SearchService(
+            bocha_keys=["dummy_key"],
+            searxng_public_instances_enabled=False,
+            news_max_age_days=3,
+            news_strategy_profile="short",
+        )
+
+        p1 = SimpleNamespace(
+            is_available=True,
+            name="P1",
+            search=MagicMock(
+                return_value=_response(
+                    [
+                        _result(
+                            "Moutai guidance update",
+                            fresh,
+                            snippet="Quarterly update from Eastmoney newsroom.",
+                            url="https://example.com/moutai-guidance",
+                            source="Eastmoney",
+                        )
+                    ]
+                )
+            ),
+        )
+        p2 = SimpleNamespace(
+            is_available=True,
+            name="P2",
+            search=MagicMock(return_value=_response([_result("中文资讯", fresh)])),
+        )
+        service._providers = [p1, p2]
+
+        resp = service.search_stock_news("600519", "Kweichow Moutai", max_results=1)
+        self.assertEqual([r.title for r in resp.results], ["Moutai guidance update"])
+        p1.search.assert_called_once()
+        p2.search.assert_not_called()
+
     def test_search_stock_news_exchange_qualified_a_share_still_prefers_chinese(self) -> None:
         """Common SH/SZ-prefixed or suffixed A-share codes should keep Chinese preference."""
         fresh = datetime.now().date().isoformat()
@@ -506,6 +545,47 @@ class SearchNewsFreshnessTestCase(unittest.TestCase):
                             fresh,
                             snippet="Quarterly update from a mainland finance outlet.",
                             url="https://finance.eastmoney.com/a/202604040002.html",
+                            source="Eastmoney",
+                        )
+                    ]
+                )
+            ),
+        )
+        p2 = SimpleNamespace(
+            is_available=True,
+            name="P2",
+            search=MagicMock(return_value=_response([_result("中文资讯", fresh)])),
+        )
+        service._providers = [p1, p2]
+
+        with patch("src.search_service.time.sleep"):
+            intel = service.search_comprehensive_intel("600519", "Kweichow Moutai", max_searches=1)
+
+        self.assertEqual([r.title for r in intel["latest_news"].results], ["Moutai guidance update"])
+        p1.search.assert_called_once()
+        p2.search.assert_not_called()
+
+    def test_search_comprehensive_intel_treats_mainland_source_name_as_preferred_without_domain(self) -> None:
+        """Known mainland media names should satisfy A-share preferred checks without a mainland URL."""
+        fresh = datetime.now().date().isoformat()
+        service = SearchService(
+            bocha_keys=["dummy_key"],
+            searxng_public_instances_enabled=False,
+            news_max_age_days=3,
+            news_strategy_profile="short",
+        )
+
+        p1 = SimpleNamespace(
+            is_available=True,
+            name="P1",
+            search=MagicMock(
+                return_value=_response(
+                    [
+                        _result(
+                            "Moutai guidance update",
+                            fresh,
+                            snippet="Quarterly update from Eastmoney newsroom.",
+                            url="https://example.com/moutai-guidance",
                             source="Eastmoney",
                         )
                     ]

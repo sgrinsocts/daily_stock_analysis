@@ -1947,6 +1947,26 @@ class SearchService:
         "sse.com.cn",
         "szse.cn",
     )
+    _MAINLAND_NEWS_SOURCE_NAME_HINTS = (
+        "eastmoney",
+        "10jqka",
+        "cninfo",
+        "stcn",
+        "securitiestimes",
+        "chinasecuritiesjournal",
+        "shanghaisecuritiesnews",
+        "yicai",
+        "firstfinancial",
+        "cailianpress",
+        "cailianshe",
+        "cls",
+        "caixin",
+        "jrj",
+        "sinafinance",
+        "xueqiu",
+        "wallstreetcn",
+        "wind",
+    )
 
     def __init__(
         self,
@@ -2109,6 +2129,12 @@ class SearchService:
                 return True
             if any(host == domain or host.endswith(f".{domain}") for domain in cls._MAINLAND_NEWS_DOMAIN_HINTS):
                 return True
+        normalized_source_name = re.sub(r"[^a-z0-9]+", "", (item.source or "").strip().lower())
+        if normalized_source_name:
+            return any(
+                hint in normalized_source_name
+                for hint in cls._MAINLAND_NEWS_SOURCE_NAME_HINTS
+            )
         return False
 
     @classmethod
