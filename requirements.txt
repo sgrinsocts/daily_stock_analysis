@@ -39,3 +39,4 @@ black==23.11.0
 
 # Personal additions
 rich==13.7.0  # prettier terminal output for local debugging
+ipython==8.18.1  # interactive shell for quick data exploration
