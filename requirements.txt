@@ -42,3 +42,4 @@ rich==13.7.0  # prettier terminal output for local debugging
 ipython==8.18.1  # interactive shell for quick data exploration
 jupyter==1.0.0  # notebook support for exploratory analysis and charting
 plotly==5.18.0  # interactive charts, much nicer than static matplotlib for exploring stock data
+kaleido==0.2.1  # needed for plotly static image export (saving charts as PNG/SVG)
